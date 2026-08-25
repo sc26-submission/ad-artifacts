@@ -234,15 +234,24 @@ class BatchflowScheduler:
             # h_hat(b): batches requested sooner contribute more.
             future_demand += 1.0 / float(position + 1)
 
-            # s_hat(b): jobs with less target coverage contribute more.
+            # s_hat(b): jobs with less extended-lookahead coverage contribute more.
             prepared = store.count_ready_or_inflight_in_window(
                 job.job_id,
                 epoch=job.progress.epoch,
                 start_batch_index=job.progress.next_batch_index,
-                limit=target_depth,
+                limit=extended_depth,
             )
-            coverage = min(1.0, float(prepared) / float(target_depth))
+            coverage = min(1.0, float(prepared) / float(extended_depth))
             input_shortage += 1.0 - coverage
+
+            # prepared = store.count_ready_or_inflight_in_window(
+            #     job.job_id,
+            #     epoch=job.progress.epoch,
+            #     start_batch_index=job.progress.next_batch_index,
+            #     limit=target_depth,
+            # )
+            # coverage = min(1.0, float(prepared) / float(target_depth))
+            # input_shortage += 1.0 - coverage
 
         if future_demand <= 0.0:
             return 0.0
