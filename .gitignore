@@ -1,2 +1,4 @@
 __pycache__/
 cmds.txt
+figures*
+exp_results*
