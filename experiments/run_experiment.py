@@ -151,12 +151,16 @@ def _build_coordl_config(cfg: DictConfig) -> CoorDLSystemConfig:
 def main(cfg: DictConfig) -> None:
     mp.freeze_support()
     configure_process_logging()
-
+    LOGGER.info(
+        "Starting experiment system=%s workload=%s dataset=%s jobs=%d",
+        system_name, workload_name, dataset.dataset_id, len(jobs),
+    )
     system_name = str(cfg.system.name)
     workload_name = str(cfg.workload.name)
     # _validate_ablation_config(cfg, runner_name=runner_name)
     jobs = _build_jobs(cfg)
     dataset = load_dataset_config(str(cfg.workload.dataset))
+    LOGGER.info("Loading datatset... dataset=%s", dataset.dataset_id)
     dataset = _resolve_dataset_metadata(dataset)
 
     OmegaConf.update(cfg, "resolved_dataset", asdict(dataset), force_add=True)
@@ -173,10 +177,7 @@ def main(cfg: DictConfig) -> None:
     )
     reporter.save_resolved_config()
 
-    LOGGER.info(
-        "Starting experiment system=%s workload=%s dataset=%s jobs=%d",
-        system_name, workload_name, dataset.dataset_id, len(jobs),
-    )
+  
 
     if system_name == "batchflow":
         run_batchflow_jobs(
