@@ -9,7 +9,7 @@ job_defaults:
   learning_rate: 0.00001
   weight_decay: 0.02
   alpha: 0.4
-  device: cuda
+  device: cpu
   use_amp: true
 
 jobs:
