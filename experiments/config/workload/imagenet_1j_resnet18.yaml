@@ -10,5 +10,7 @@ job_defaults:
   use_amp: true
 
 jobs:
-  - name: resnet18
-    model_name: resnet18
+  # - name: resnet18
+  #   model_name: resnet18
+  - name: mobilenet_v3_small
+    model_name: mobilenet_v3_small
