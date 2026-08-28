@@ -157,7 +157,7 @@ def main(cfg: DictConfig) -> None:
     # _validate_ablation_config(cfg, runner_name=runner_name)
     LOGGER.info(
             "Starting experiment system=%s workload=%s dataset=%s jobs=%d",
-            system_name, workload_name, cfg.workload.dataset.dataset_id, len(jobs),
+            system_name, workload_name, cfg.workload.dataset, len(jobs),
         )
     
     jobs = _build_jobs(cfg)
