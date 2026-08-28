@@ -157,13 +157,9 @@ def main(cfg: DictConfig) -> None:
     # _validate_ablation_config(cfg, runner_name=runner_name)
     jobs = _build_jobs(cfg)
 
-    print(
-            "Starting experiment system=%s workload=%s dataset=%s jobs=%d",
-            system_name, workload_name, cfg.workload.dataset, len(jobs),
-        )
-    
+    print(f"Starting experiment system={system_name} workload={workload_name} dataset={cfg.workload.dataset} jobs={len(jobs)}")
     dataset = load_dataset_config(str(cfg.workload.dataset))
-    print("Loading datatset... dataset=%s", dataset.dataset_id)
+    print(f"Loading datatset... dataset={dataset.dataset_id}")
     dataset = _resolve_dataset_metadata(dataset)
 
     OmegaConf.update(cfg, "resolved_dataset", asdict(dataset), force_add=True)
