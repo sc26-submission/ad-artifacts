@@ -3,10 +3,10 @@ dataset: imagenet
 results_dir: exp_results
 
 job_defaults:
-  num_batches: 100
+  num_batches: 50
   warmup_batches: 5
   learning_rate: 0.001
-  device: cuda
+  device: cpu
   use_amp: true
 
 jobs:
