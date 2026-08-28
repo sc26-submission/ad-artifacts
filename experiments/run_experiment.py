@@ -151,13 +151,15 @@ def _build_coordl_config(cfg: DictConfig) -> CoorDLSystemConfig:
 def main(cfg: DictConfig) -> None:
     mp.freeze_support()
     configure_process_logging()
-    LOGGER.info(
-        "Starting experiment system=%s workload=%s dataset=%s jobs=%d",
-        system_name, workload_name, dataset.dataset_id, len(jobs),
-    )
+    
     system_name = str(cfg.system.name)
     workload_name = str(cfg.workload.name)
     # _validate_ablation_config(cfg, runner_name=runner_name)
+    LOGGER.info(
+            "Starting experiment system=%s workload=%s dataset=%s jobs=%d",
+            system_name, workload_name, cfg.workload.dataset.dataset_id, len(jobs),
+        )
+    
     jobs = _build_jobs(cfg)
     dataset = load_dataset_config(str(cfg.workload.dataset))
     LOGGER.info("Loading datatset... dataset=%s", dataset.dataset_id)
