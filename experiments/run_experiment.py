@@ -155,12 +155,13 @@ def main(cfg: DictConfig) -> None:
     system_name = str(cfg.system.name)
     workload_name = str(cfg.workload.name)
     # _validate_ablation_config(cfg, runner_name=runner_name)
+    jobs = _build_jobs(cfg)
+
     LOGGER.info(
             "Starting experiment system=%s workload=%s dataset=%s jobs=%d",
             system_name, workload_name, cfg.workload.dataset, len(jobs),
         )
     
-    jobs = _build_jobs(cfg)
     dataset = load_dataset_config(str(cfg.workload.dataset))
     LOGGER.info("Loading datatset... dataset=%s", dataset.dataset_id)
     dataset = _resolve_dataset_metadata(dataset)
