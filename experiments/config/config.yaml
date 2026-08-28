@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - system: pytorch
-  - workload: openimages_1j_vit_b_32
+  - workload: coco_1j_albef_2
   - override hydra/hydra_logging: disabled
   - override hydra/job_logging: disabled
 
