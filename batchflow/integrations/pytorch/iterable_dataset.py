@@ -66,7 +66,7 @@ class BatchFlowIterator:
                         self._queue_empty_events,
                     )
 
-                self._log_status()
+                # self._log_status()
                 continue
 
             if isinstance(item, BatchItem):

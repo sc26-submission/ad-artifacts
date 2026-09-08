@@ -74,8 +74,7 @@ class BatchFlowTorchConfig:
     # process start order.
     job_index: int = 0
 
-    # Optional per-job lookahead override for debugging/experiments.
-    # The coordinator may ignore or adapt this in future versions.
+    # per-job lookahead override for debugging/experiments.
     lookahead_batches: int = 16
 
     # How long to sleep before polling again when GetNextBatch returns pending.
@@ -88,7 +87,7 @@ class BatchFlowTorchConfig:
     coordinator_timeout_seconds: float | None = None
 
     # Maximum number of decoded batches to buffer for the trainer.
-    max_ready_batches: int = 4
+    max_ready_batches: int = 16
 
     # Number of trainer-side threads used to fetch/decode worker payloads.
     parallel_fetch_workers: int = 4
