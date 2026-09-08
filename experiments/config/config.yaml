@@ -1,7 +1,7 @@
 defaults:
   - _self_
-  - system: pytorch
-  - workload: coco_1j_albef_2
+  - system: batchflow
+  - workload: imagenet_1j_resnet18
   - override hydra/hydra_logging: disabled
   - override hydra/job_logging: disabled
 
