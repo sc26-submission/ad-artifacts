@@ -19,7 +19,7 @@ from batchflow.integrations.pytorch.prefetcher import (
 )
 
 
-LOGGER = logging.getLogger("batchflow.integrations.pytorch.dataset")
+LOGGER = logging.getLogger(__name__)
 
 
 class BatchFlowIterator:
@@ -37,9 +37,22 @@ class BatchFlowIterator:
         self._closed = False
         self._consumed_batches = 0
         self._queue_empty_events = 0
-        self._last_status_log_time = time.time()
+        self._last_status_log_time = time.monotonic()
 
         self.prefetcher.start()
+
+        LOGGER.debug(
+            f"BatchFlow prefetch started | "
+            f"job={self._job_id} "
+            f"dataset={self.config.dataset_id} "
+            f"max_batches={self.config.max_batches} "
+            f"prefetch_capacity={self.prefetcher.maxsize()} "
+            f"fetch_workers={self.config.parallel_fetch_workers}"
+        )
+
+    @property
+    def _job_id(self) -> str:
+        return self.config.job_id or "-"
 
     def __iter__(self) -> "BatchFlowIterator":
         return self
@@ -53,20 +66,18 @@ class BatchFlowIterator:
                 item = self.prefetcher.get_item(
                     timeout_seconds=self.config.ready_queue_timeout_seconds,
                 )
+
             except queue.Empty:
                 self._queue_empty_events += 1
 
                 if self.config.log_trainer_waits:
                     LOGGER.warning(
-                        "BatchFlow torch ready queue empty "
-                        "consumed_batches=%s ready_queue=%s/%s empty_events=%s",
-                        self._consumed_batches,
-                        self.prefetcher.qsize(),
-                        self.prefetcher.maxsize(),
-                        self._queue_empty_events,
+                        f"BatchFlow waiting for data | "
+                        f"job={self._job_id} "
+                        f"next_batch={self._consumed_batches + 1} "
+                        f"wait_events={self._queue_empty_events}"
                     )
 
-                # self._log_status()
                 continue
 
             if isinstance(item, BatchItem):
@@ -83,27 +94,33 @@ class BatchFlowIterator:
                 return item.batch
 
             if isinstance(item, EndItem):
-                LOGGER.info(
-                    "BatchFlow torch iterator received end "
-                    "consumed_batches=%s queue_empty_events=%s",
-                    self._consumed_batches,
-                    self._queue_empty_events,
+                LOGGER.debug(
+                    f"BatchFlow prefetch finished | "
+                    f"job={self._job_id} "
+                    f"batches={self._consumed_batches} "
+                    f"wait_events={self._queue_empty_events}"
                 )
+
                 self.close()
                 raise StopIteration
 
             if isinstance(item, ErrorItem):
                 LOGGER.error(
-                    "BatchFlow torch iterator received error "
-                    "consumed_batches=%s queue_empty_events=%s",
-                    self._consumed_batches,
-                    self._queue_empty_events,
+                    f"BatchFlow prefetch failed | "
+                    f"job={self._job_id} "
+                    f"batches={self._consumed_batches} "
+                    f"error={type(item.error).__name__}: {item.error}"
                 )
+
                 self.close()
                 raise item.error
 
             self.close()
-            raise RuntimeError(f"unexpected queue item type: {type(item).__name__}")
+
+            raise RuntimeError(
+                f"Unexpected BatchFlow prefetch item: "
+                f"{type(item).__name__}"
+            )
 
     def update_runtime_metrics(
         self,
@@ -131,6 +148,12 @@ class BatchFlowIterator:
         self._closed = True
         self.prefetcher.shutdown()
 
+        LOGGER.debug(
+            f"BatchFlow prefetch closed | "
+            f"job={self._job_id} "
+            f"batches={self._consumed_batches}"
+        )
+
     def __del__(self) -> None:
         try:
             self.close()
@@ -138,36 +161,35 @@ class BatchFlowIterator:
             pass
 
     def _log_status(self) -> None:
-        if self.config.log_every_n_batches > 0:
-            if self._consumed_batches % self.config.log_every_n_batches == 0:
-                LOGGER.info(
-                    "BatchFlow torch trainer progress "
-                    "consumed_batches=%s ready_queue=%s/%s empty_events=%s",
-                    self._consumed_batches,
-                    self.prefetcher.qsize(),
-                    self.prefetcher.maxsize(),
-                    self._queue_empty_events,
-                )
-                return
+        now = time.monotonic()
 
-        if self.config.log_interval_seconds <= 0:
+        log_for_batch_count = (
+            self.config.log_every_n_batches > 0
+            and self._consumed_batches > 0
+            and self._consumed_batches % self.config.log_every_n_batches == 0
+        )
+
+        log_for_interval = (
+            self.config.log_interval_seconds > 0
+            and now - self._last_status_log_time
+            >= self.config.log_interval_seconds
+        )
+
+        if not log_for_batch_count and not log_for_interval:
             return
 
-        now = time.time()
+        prefetched = self.prefetcher.qsize()
+        prefetch_capacity = self.prefetcher.maxsize()
 
-        if now - self._last_status_log_time < self.config.log_interval_seconds:
-            return
-
-        LOGGER.info(
-            "BatchFlow torch trainer status "
-            "consumed_batches=%s ready_queue=%s/%s empty_events=%s",
-            self._consumed_batches,
-            self.prefetcher.qsize(),
-            self.prefetcher.maxsize(),
-            self._queue_empty_events,
+        LOGGER.debug(
+            f"BatchFlow prefetch status | "
+            f"job={self._job_id} "
+            f"batches={self._consumed_batches}/{self.config.max_batches} "
+            f"prefetched={prefetched}/{prefetch_capacity}"
         )
 
         self._last_status_log_time = now
+
 
 class BatchFlowIterableDataset(IterableDataset):
     def __init__(
@@ -214,7 +236,9 @@ class BatchFlowIterableDataset(IterableDataset):
                 log_interval_seconds=log_interval_seconds,
                 log_every_n_batches=log_every_n_batches,
                 log_trainer_waits=log_trainer_waits,
-                log_pending_batch_every_n_polls=log_pending_batch_every_n_polls,
+                log_pending_batch_every_n_polls=(
+                    log_pending_batch_every_n_polls
+                ),
             )
 
         config.validate()
@@ -225,9 +249,9 @@ class BatchFlowIterableDataset(IterableDataset):
 
         if worker_info is not None:
             raise RuntimeError(
-                "BatchFlowIterableDataset currently requires "
+                "BatchFlowIterableDataset requires "
                 "DataLoader(..., batch_size=None, num_workers=0). "
-                "PyTorch worker sharding can be added later."
+                "PyTorch DataLoader worker sharding is not currently supported."
             )
 
         return BatchFlowIterator(self.config)
