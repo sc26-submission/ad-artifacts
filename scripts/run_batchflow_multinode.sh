@@ -5,7 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 PYTHON="${BATCHFLOW_PYTHON:-$HOME/miniconda3/envs/batchflow/bin/python}"
+
 TOPOLOGY_CONFIG="$ROOT/batchflow/config/topology/aws.yaml"
+SCHEDULER_CONFIG="$ROOT/batchflow/config/scheduler/default.yaml"
 
 REMOTE_USER="${BATCHFLOW_REMOTE_USER:-ubuntu}"
 REMOTE_ROOT="${BATCHFLOW_REMOTE_ROOT:-/home/ubuntu/batchflow-ad-artifacts}"
@@ -23,7 +25,7 @@ EXPERIMENT_LOG="$LOG_DIR/experiment.log"
 
 
 # ---------------------------------------------------------------------------
-# Read addresses from topology config
+# Read topology
 # ---------------------------------------------------------------------------
 
 read -r NODE1_HOST NODE1_PORT COORDINATOR_PORT < <(
@@ -81,8 +83,79 @@ while time.monotonic() < deadline:
     except OSError:
         time.sleep(0.5)
 
-print(f"Timed out waiting for {name} at {host}:{port}", file=sys.stderr)
+print(
+    f"Timed out waiting for {name} at {host}:{port}",
+    file=sys.stderr,
+)
 raise SystemExit(1)
+PY
+}
+
+
+clear_redis_if_reuse_enabled() {
+    "$PYTHON" - "$SCHEDULER_CONFIG" "$TOPOLOGY_CONFIG" <<'PY'
+import sys
+
+import redis
+from omegaconf import OmegaConf
+
+
+scheduler_path = sys.argv[1]
+topology_path = sys.argv[2]
+
+scheduler = OmegaConf.load(scheduler_path)
+topology = OmegaConf.load(topology_path)
+
+if not scheduler.get("reuse_enabled", False):
+    print("Reuse disabled; skipping Redis setup.")
+    raise SystemExit(0)
+
+redis_config = topology.get("redis")
+
+if redis_config is None:
+    raise RuntimeError(
+        "reuse_enabled=true but no Redis configuration was found "
+        "in the topology."
+    )
+
+host = str(redis_config.host)
+port = int(redis_config.get("port", 6379))
+ssl = bool(redis_config.get("ssl", False))
+db = int(redis_config.get("db", 0))
+key_prefix = str(redis_config.get("key_prefix", "batchflow"))
+
+print("Reuse enabled.")
+print(f"Checking Redis at {host}:{port}...")
+
+client = redis.Redis(
+    host=host,
+    port=port,
+    ssl=ssl,
+    db=db,
+    socket_connect_timeout=5,
+    socket_timeout=5,
+)
+
+if not client.ping():
+    raise RuntimeError("Redis ping failed.")
+
+print("Redis is reachable.")
+
+pattern = f"{key_prefix}:*"
+deleted = 0
+buffer = []
+
+for key in client.scan_iter(match=pattern, count=500):
+    buffer.append(key)
+
+    if len(buffer) >= 500:
+        deleted += client.delete(*buffer)
+        buffer.clear()
+
+if buffer:
+    deleted += client.delete(*buffer)
+
+print(f"Cleared {deleted} cached BatchFlow entries.")
 PY
 }
 
@@ -118,12 +191,11 @@ cleanup() {
     exit "$exit_code"
 }
 
-
 trap cleanup EXIT INT TERM
 
 
 # ---------------------------------------------------------------------------
-# Preflight checks
+# Preflight
 # ---------------------------------------------------------------------------
 
 if [[ ! -x "$PYTHON" ]]; then
@@ -133,6 +205,11 @@ fi
 
 if [[ ! -f "$TOPOLOGY_CONFIG" ]]; then
     echo "Topology config not found: $TOPOLOGY_CONFIG"
+    exit 1
+fi
+
+if [[ ! -f "$SCHEDULER_CONFIG" ]]; then
+    echo "Scheduler config not found: $SCHEDULER_CONFIG"
     exit 1
 fi
 
@@ -146,6 +223,13 @@ if [[ ! -r "$SSH_KEY" ]]; then
     exit 1
 fi
 
+export PYTHONPATH="$ROOT:${PYTHONPATH:-}"
+
+
+# ---------------------------------------------------------------------------
+# Check remote node
+# ---------------------------------------------------------------------------
+
 echo "Checking remote node..."
 
 ssh "${SSH_OPTS[@]}" "$REMOTE" "
@@ -157,14 +241,22 @@ echo "Remote node reachable: $REMOTE"
 
 
 # ---------------------------------------------------------------------------
+# Redis / reuse
+# ---------------------------------------------------------------------------
+
+echo
+echo "Checking reuse configuration..."
+
+clear_redis_if_reuse_enabled
+
+
+# ---------------------------------------------------------------------------
 # Node 0: coordinator + local workers
 # ---------------------------------------------------------------------------
 
 echo
 echo "Starting node-0..."
 echo "  log: $NODE0_LOG"
-
-export PYTHONPATH="$ROOT:${PYTHONPATH:-}"
 
 setsid "$PYTHON" -m batchflow.deployment.launch_batchflow \
     topology=aws \
@@ -234,7 +326,9 @@ echo
 
 set +e
 
-"$PYTHON" -m experiments.run_experiment "$@" \
+"$PYTHON" -m experiments.run_experiment \
+    system=batchflow \
+    "$@" \
     2>&1 | tee "$EXPERIMENT_LOG"
 
 EXPERIMENT_EXIT_CODE=${PIPESTATUS[0]}
