@@ -10,6 +10,7 @@ TOPOLOGY_CONFIG="$ROOT/batchflow/config/topology/aws.yaml"
 REMOTE_USER="${BATCHFLOW_REMOTE_USER:-ubuntu}"
 REMOTE_ROOT="${BATCHFLOW_REMOTE_ROOT:-/home/ubuntu/batchflow-ad-artifacts}"
 REMOTE_PYTHON="${BATCHFLOW_REMOTE_PYTHON:-/home/ubuntu/miniconda3/envs/batchflow/bin/python}"
+SSH_KEY="${BATCHFLOW_SSH_KEY:-$HOME/.ssh/batchflow_node}"
 
 LOG_DIR="$ROOT/.run_logs"
 REMOTE_PID_FILE="/tmp/batchflow-node1.pid"
@@ -22,7 +23,7 @@ EXPERIMENT_LOG="$LOG_DIR/experiment.log"
 
 
 # ---------------------------------------------------------------------------
-# Read addresses directly from the topology config.
+# Read addresses from topology config
 # ---------------------------------------------------------------------------
 
 read -r NODE1_HOST NODE1_PORT COORDINATOR_PORT < <(
@@ -43,6 +44,7 @@ PY
 REMOTE="${REMOTE_USER}@${NODE1_HOST}"
 
 SSH_OPTS=(
+    -i "$SSH_KEY"
     -o BatchMode=yes
     -o ConnectTimeout=10
     -o StrictHostKeyChecking=accept-new
@@ -121,7 +123,7 @@ trap cleanup EXIT INT TERM
 
 
 # ---------------------------------------------------------------------------
-# Preflight
+# Preflight checks
 # ---------------------------------------------------------------------------
 
 if [[ ! -x "$PYTHON" ]]; then
@@ -131,6 +133,16 @@ fi
 
 if [[ ! -f "$TOPOLOGY_CONFIG" ]]; then
     echo "Topology config not found: $TOPOLOGY_CONFIG"
+    exit 1
+fi
+
+if [[ ! -f "$SSH_KEY" ]]; then
+    echo "SSH key not found: $SSH_KEY"
+    exit 1
+fi
+
+if [[ ! -r "$SSH_KEY" ]]; then
+    echo "SSH key is not readable: $SSH_KEY"
     exit 1
 fi
 
@@ -145,7 +157,7 @@ echo "Remote node reachable: $REMOTE"
 
 
 # ---------------------------------------------------------------------------
-# Node 0: coordinator + 48 local workers
+# Node 0: coordinator + local workers
 # ---------------------------------------------------------------------------
 
 echo
@@ -168,7 +180,7 @@ wait_for_port \
 
 
 # ---------------------------------------------------------------------------
-# Node 1: 16 remote workers
+# Node 1: remote workers
 # ---------------------------------------------------------------------------
 
 echo
@@ -214,9 +226,8 @@ wait_for_port \
 echo
 echo "BatchFlow cluster ready."
 echo
-echo "  node-0: coordinator + 48 workers"
-echo "  node-1: 16 workers"
-echo "  total:  64 workers"
+echo "  node-0: coordinator + local workers"
+echo "  node-1: remote workers"
 echo
 echo "Starting experiment..."
 echo
@@ -236,6 +247,7 @@ if [[ "$EXPERIMENT_EXIT_CODE" -eq 0 ]]; then
 else
     echo
     echo "Experiment failed with exit code $EXPERIMENT_EXIT_CODE."
+    echo
     echo "Logs:"
     echo "  $NODE0_LOG"
     echo "  $NODE1_LOG"
