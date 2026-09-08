@@ -75,7 +75,7 @@ class BatchFlowTorchConfig:
     job_index: int = 0
 
     # per-job lookahead override for debugging/experiments.
-    lookahead_batches: int = 16
+    lookahead_batches: int = 32
 
     # How long to sleep before polling again when GetNextBatch returns pending.
     request_poll_interval_seconds: float = 0.2
@@ -87,10 +87,10 @@ class BatchFlowTorchConfig:
     coordinator_timeout_seconds: float | None = None
 
     # Maximum number of decoded batches to buffer for the trainer.
-    max_ready_batches: int = 4
+    max_ready_batches: int = 16
 
     # Number of trainer-side threads used to fetch/decode worker payloads.
-    parallel_fetch_workers: int = 4
+    parallel_fetch_workers: int = 8
 
     # How long the trainer waits for a ready batch before logging/checking again.
     ready_queue_timeout_seconds: float = 0.5
