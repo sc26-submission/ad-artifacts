@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from collections.abc import Callable, Iterable
@@ -7,14 +8,14 @@ from typing import Any
 
 import torch
 
-from batchflow.common.utils import ResourceMonitor, SmoothedMeter
+from batchflow.common.utils import ResourceMonitor
 from experiments.common.training import TrainingComponents
 
 
 def configure_process_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
+        format="%(asctime)s | %(levelname)-8s | %(message)s",
         datefmt="%H:%M:%S",
         force=True,
     )
@@ -28,29 +29,31 @@ def resolve_device_and_amp(
 ) -> tuple[torch.device, bool]:
     requested = device.lower()
 
-    if requested in {"auto", "cuda"} and torch.cuda.is_available():
-        device_count = torch.cuda.device_count()
+    if requested in {"auto", "cuda"}:
+        if torch.cuda.is_available():
+            device_count = torch.cuda.device_count()
 
-        if job_index >= device_count:
-            raise RuntimeError(
-                f"Job {job_index} requires a GPU, but only "
-                f"{device_count} CUDA device(s) are available."
-            )
+            if job_index >= device_count:
+                raise RuntimeError(
+                    f"Job {job_index} requires a GPU, but only {device_count} CUDA device(s) "
+                    f"are available."
+                )
 
-        resolved = torch.device(f"cuda:{job_index}")
+            resolved = torch.device(f"cuda:{job_index}")
 
-    elif requested == "auto":
-        resolved = torch.device("cpu")
+        elif requested == "cuda":
+            raise RuntimeError("CUDA was requested, but no CUDA device is available.")
+
+        else:
+            resolved = torch.device("cpu")
 
     else:
         resolved = torch.device(device)
 
-    amp_enabled = (
-        resolved.type == "cuda"
-        if use_amp is None
-        else bool(use_amp) and resolved.type == "cuda"
-    )
+        if resolved.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError(f"Device {resolved} was requested, but CUDA is not available.")
 
+    amp_enabled = resolved.type == "cuda" if use_amp is None else use_amp and resolved.type == "cuda"
     return resolved, amp_enabled
 
 
@@ -61,21 +64,14 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def _batch_scalar(
-    batch: dict[str, Any],
-    key: str,
-    default: float = 0.0,
-) -> float:
+def _batch_scalar(batch: dict[str, Any], key: str, default: float = 0.0) -> float:
     value = batch.get(key)
 
     if value is None:
         return default
 
     if isinstance(value, torch.Tensor):
-        if value.numel() == 0:
-            return default
-
-        return float(value.sum().item())
+        return float(value.sum().item()) if value.numel() else default
 
     try:
         return float(value)
@@ -83,125 +79,115 @@ def _batch_scalar(
         return default
 
 
-def _extract_batch_metrics(
+def _first_batch_scalar(
     batch: dict[str, Any],
-) -> dict[str, float]:
-    keys = {
-        "batch_io_time_sec": "io_time_sec",
-        "batch_decode_time_sec": "decode_time_sec",
-        "batch_transform_time_sec": "transform_time_sec",
-        "batchflow_worker_io_time_sec": "worker_io_time_sec",
-        "batchflow_worker_decode_time_sec": "worker_decode_time_sec",
-        "batchflow_worker_transform_time_sec": "worker_transform_time_sec",
-        "batchflow_worker_stack_time_sec": "worker_stack_time_sec",
-        "batchflow_worker_serialize_time_sec": "worker_serialize_time_sec",
-        "batchflow_fetch_time_sec": "fetch_time_sec",
-        "batchflow_coordinator_rpc_time_sec": "coordinator_rpc_time_sec",
-        "batchflow_coordinator_sleep_time_sec": "coordinator_sleep_time_sec",
-        "batchflow_coordinator_wait_total_time_sec": (
-            "coordinator_wait_total_time_sec"
-        ),
-        "batchflow_coordinator_pending_polls": "pending_polls_before_batch",
-        "trainer_decode_time_sec": "trainer_decode_time_sec",
-        "trainer_pin_time_sec": "trainer_pin_time_sec",
-        "prefetch_queue_size_before_put": "prefetch_queue_size_before_put",
-        "trainer_queue_size_after_get": "trainer_queue_size_after_get",
-        "trainer_queue_empty_events": "trainer_queue_empty_events",
-        "tensorsocket_wait_time_sec": "tensorsocket_wait_time_sec",
-        "tensorsocket_cache_hit": "tensorsocket_cache_hit",
-        "coordl_wait_time_sec": "coordl_wait_time_sec",
-        "coordl_deserialize_time_sec": "coordl_deserialize_time_sec",
-        "coordl_io_time_sec": "coordl_io_time_sec",
-        "coordl_decode_time_sec": "coordl_decode_time_sec",
-        "coordl_transform_time_sec": "coordl_transform_time_sec",
-        "coordl_prep_time_sec": "coordl_prep_time_sec",
-        "coordl_payload_bytes": "coordl_payload_bytes",
-        "coordl_is_owner": "coordl_is_owner",
-    }
-
-    return {
-        output_name: _batch_scalar(batch, batch_name)
-        for output_name, batch_name in keys.items()
-    }
-
-def gen_batch_id(indices: list[int]) -> str:
-        # create undique batch id from indices list using hash function
-        return str(hash(tuple(indices)))
-
-     
-
-def _bottleneck_percent(
-    data_time: float,
-    compute_time: float,
+    *keys: str,
+    default: float = 0.0,
 ) -> float:
-    total = data_time + compute_time
-    return 100.0 * data_time / max(total, 1e-12)
+    for key in keys:
+        if batch.get(key) is not None:
+            return _batch_scalar(batch, key, default)
+
+    return default
 
 
-def _update_batchflow_metrics(
-    batch_iter: Any,
-    *,
-    data_meter: SmoothedMeter,
-    compute_meter: SmoothedMeter,
-    batch_metrics: dict[str, float],
-) -> None:
-    update = getattr(batch_iter, "update_runtime_metrics", None)
+def _extract_batch_timings(batch: dict[str, Any]) -> tuple[float, float, float]:
+    """Return I/O, decode, and transform time for any supported data backend."""
 
-    if not callable(update):
-        return
+    if batch.get("trainer_decode_time_sec") is not None:
+        io_time = _first_batch_scalar(
+            batch,
+            "coordinator_wait_total_time_sec",
+            "batchflow_coordinator_wait_total_time_sec",
+        ) + _first_batch_scalar(
+            batch,
+            "fetch_time_sec",
+            "batchflow_fetch_time_sec",
+        )
 
-    update(
-        data_bottleneck_percent=_bottleneck_percent(
-            data_meter.avg,
-            compute_meter.avg,
-        ),
-        avg_data_time_sec=data_meter.avg,
-        avg_compute_time_sec=compute_meter.avg,
-        avg_coordinator_wait_total_time_sec=(
-            batch_metrics["batchflow_coordinator_wait_total_time_sec"]
-        ),
-        avg_coordinator_pending_polls=(
-            batch_metrics["batchflow_coordinator_pending_polls"]
-        ),
+        decode_time = _batch_scalar(batch, "trainer_decode_time_sec")
+
+        transform_time = _first_batch_scalar(
+            batch,
+            "trainer_transform_time_sec",
+            "batchflow_worker_transform_time_sec",
+            "worker_transform_time_sec",
+        )
+
+        return io_time, decode_time, transform_time
+
+    return (
+        _batch_scalar(batch, "io_time_sec"),
+        _batch_scalar(batch, "decode_time_sec"),
+        _batch_scalar(batch, "transform_time_sec"),
     )
 
 
-def _should_log_batch(
-    batch: int,
-    total_batches: int,
-    log_every_batches: int,
-) -> bool:
+def _extract_batch_indices(batch: dict[str, Any]) -> list[Any]:
+    for key in ("batch_indices", "index", "sample_id"):
+        value = batch.get(key)
+
+        if value is None:
+            continue
+
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+
+        if isinstance(value, list):
+            return value
+
+        if isinstance(value, tuple):
+            return list(value)
+
+        return [value]
+
+    return []
+
+
+def _generate_batch_id(indices: list[Any]) -> str | None:
+    if not indices:
+        return None
+
+    payload = repr(tuple(indices)).encode()
+    return hashlib.blake2b(payload, digest_size=8).hexdigest()
+
+
+def _resolve_batch_id(batch: dict[str, Any], indices: list[Any]) -> str | None:
+    batch_id = batch.get("batch_id")
+
+    if batch_id is not None:
+        return str(batch_id)
+
+    return _generate_batch_id(indices)
+
+
+def _should_log_batch(batch: int, total_batches: int, log_every_batches: int) -> bool:
     return (
         batch == 1
         or batch == total_batches
-        or (
-            log_every_batches > 0
-            and batch % log_every_batches == 0
-        )
+        or (log_every_batches > 0 and batch % log_every_batches == 0)
     )
 
 
 def _log_warmup_progress(
     logger: logging.Logger,
     *,
-    mode: str,
+    prefix: str,
     batch: int,
     warmup_batches: int,
     data_time: float,
     compute_time: float,
 ) -> None:
     logger.info(
-        f"{mode} | "
-        f"warmup={batch}/{warmup_batches} | "
-        f"data={data_time:.4f}s | "
-        f"compute={compute_time:.4f}s"
+        f"{prefix} | warmup={batch}/{warmup_batches} | "
+        f"data={data_time:.4f}s | compute={compute_time:.4f}s"
     )
 
 
 def _log_progress(
     logger: logging.Logger,
     *,
-    mode: str,
+    prefix: str,
     batch: int,
     num_batches: int,
     total_samples: int,
@@ -211,17 +197,13 @@ def _log_progress(
 ) -> None:
     avg_data_time = total_data_time / batch
     avg_compute_time = total_compute_time / batch
-
     batches_per_sec = batch / max(total_batch_time, 1e-12)
     samples_per_sec = total_samples / max(total_batch_time, 1e-12)
 
     logger.info(
-        f"{mode} | "
-        f"batch={batch}/{num_batches} | "
-        f"data={avg_data_time:.4f}s | "
-        f"compute={avg_compute_time:.4f}s | "
-        f"throughput={batches_per_sec:.2f} batches/s | "
-        f"samples={samples_per_sec:.2f}/s"
+        f"{prefix} | batch={batch}/{num_batches} | "
+        f"data={avg_data_time:.4f}s | compute={avg_compute_time:.4f}s | "
+        f"throughput={samples_per_sec:.1f} samples/s ({batches_per_sec:.2f} batches/s)"
     )
 
 
@@ -239,36 +221,32 @@ def run_training_loop(
     logger: logging.Logger,
     log_every_batches: int = 10,
 ) -> None:
-    """Run warmup batches followed by exactly num_batches training batches."""
+    """Run warmup batches followed by exactly ``num_batches`` training batches."""
 
-    # Rolling measurements used for BatchFlow runtime feedback.
-    data_meter = SmoothedMeter(window_size=20)
-    compute_meter = SmoothedMeter(window_size=20)
-    batch_meter = SmoothedMeter(window_size=20)
-    throughput_meter = SmoothedMeter(window_size=20)
+    job_id = job_id or "-"
+    prefix = f"{mode} | job={job_id}"
 
     amp_enabled = bool(use_amp and device.type == "cuda")
-    scaler = torch.amp.GradScaler(
-        "cuda",
-        enabled=amp_enabled,
-    )
+    scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
 
     iterator = iter(batch_iter)
     total_loop_batches = warmup_batches + num_batches
-    run_start = time.perf_counter()
 
-    # Cumulative values exclude warmup.
     completed_batches = 0
     total_samples = 0
     total_data_time = 0.0
     total_compute_time = 0.0
     total_batch_time = 0.0
 
-    monitor = ResourceMonitor(
-        sample_interval_seconds=0.25,
-        logger=logger,
-    )
+    run_start = time.perf_counter()
+
+    monitor = ResourceMonitor(sample_interval_seconds=0.25, logger=logger)
     monitor.start()
+
+    logger.info(
+        f"{prefix} | started | device={device} | amp={amp_enabled} | "
+        f"batches={num_batches} | warmup={warmup_batches}"
+    )
 
     try:
         training.model.train()
@@ -277,18 +255,25 @@ def run_training_loop(
             is_warmup = loop_batch < warmup_batches
             batch_start = time.perf_counter()
 
-            # Time spent waiting for the next batch.
             data_start = time.perf_counter()
-            batch = next(iterator)
-            data_time = time.perf_counter() - data_start
 
-            # batch_metrics = _extract_batch_metrics(batch)
+            try:
+                batch = next(iterator)
+            except StopIteration as exc:
+                raise RuntimeError(
+                    f"{prefix} | data source ended early at "
+                    f"batch {loop_batch + 1}/{total_loop_batches}"
+                ) from exc
+
+            data_time = time.perf_counter() - data_start
 
             result = training.run_batch(
                 batch,
                 scaler=scaler,
                 amp_enabled=amp_enabled,
             )
+
+            batch_time = time.perf_counter() - batch_start
 
             loss = result.loss
             batch_size = result.batch_size
@@ -297,23 +282,6 @@ def run_training_loop(
             backward_time = result.backward_time_sec
             optimizer_time = result.optimizer_step_time_sec
 
-            batch_time = time.perf_counter() - batch_start
-            samples_per_sec = batch_size / max(batch_time, 1e-12)
-
-     
-            data_meter.update(data_time)
-            compute_meter.update(compute_time)
-            batch_meter.update(batch_time)
-            throughput_meter.update(samples_per_sec)
-
-            # _update_batchflow_metrics(
-            #     iterator,
-            #     data_meter=data_meter,
-            #     compute_meter=compute_meter,
-            #     batch_metrics=batch_metrics,
-            # )
-
-            # Warmup batches are excluded from the cumulative run statistics.
             if not is_warmup:
                 completed_batches += 1
                 total_samples += batch_size
@@ -321,55 +289,13 @@ def run_training_loop(
                 total_compute_time += compute_time
                 total_batch_time += batch_time
 
+            batch_indices = _extract_batch_indices(batch)
+            batch_id = _resolve_batch_id(batch, batch_indices)
+            io_time, decode_time, transform_time = _extract_batch_timings(batch)
+
             elapsed_time = time.perf_counter() - run_start
-
-            batch_id = batch.get("batch_id")
-
-            if batch_id is None and isinstance(batch.get("index"), torch.Tensor):
-                batch_id = gen_batch_id(batch.get("index").tolist())
-            elif batch_id is None and isinstance(batch.get("batch_indices"), list):
-                batch_id = gen_batch_id(batch.get("batch_indices"))
-
-
-            batch_indices = batch.get("batch_indices")
-
-            if batch_indices is None:
-                batch_indices = batch.get("index")
-
-            if batch_indices is None:
-                batch_indices = batch.get("sample_id")
-
-            batch_indices = batch_indices.tolist() if hasattr(batch_indices, "tolist") else batch_indices or []
-
-            if batch.get("trainer_decode_time_sec") is not None:
-                # worker_io_time_sec =  float(batch.get("worker_io_time_sec").sum().item())
-                # worker_decode_time_sec = float(batch.get("worker_decode_time_sec").sum().item())
-                # worker_transform_time_sec = float(batch.get("worker_transform_time_sec").sum().item())
-
-                batch_io_time = batch.get("coordinator_wait_total_time_sec") + batch.get("fetch_time_sec")
-                batch_decode_time = batch.get("trainer_decode_time_sec")
-                batch_transform_time = batch.get("trainer_decode_time_sec")
-
-            elif batch.get("io_time_sec") is not None:
-                if isinstance(batch.get("io_time_sec"), torch.Tensor):
-                    batch_io_time = float(batch.get("io_time_sec").sum().item())
-                else:
-                    batch_io_time = float(batch.get("io_time_sec"))
-
-                if isinstance(batch.get("decode_time_sec"), torch.Tensor):
-                    batch_decode_time = float(batch.get("decode_time_sec").sum().item())
-                else:
-                    batch_decode_time = float(batch.get("decode_time_sec"))
-
-                if isinstance(batch.get("transform_time_sec"), torch.Tensor):
-                    batch_transform_time = float(batch.get("transform_time_sec").sum().item())
-                else:
-                    batch_transform_time = float(batch.get("transform_time_sec"))
-            
-
-
-                # batch_decode_time = batch.get("decode_time_sec") or float(batch.get("decode_time_sec").sum().item())
-                # batch_transform_time = batch.get("transform_time_sec") or float(batch.get("transform_time_sec").sum().item())
+            samples_per_sec = total_samples / max(total_batch_time, 1e-12)
+            batches_per_sec = completed_batches / max(total_batch_time, 1e-12)
 
             row = {
                 "system": mode,
@@ -383,19 +309,16 @@ def run_training_loop(
                 "total_batch_time_sec": batch_time,
                 "total_load_batch_time_sec": data_time,
                 "total_model_compute_time_sec": compute_time,
-                "batch_io_time_sec": batch_io_time,
-                "batch_decode_time_sec": batch_decode_time,
-                "batch_transform_time_sec": batch_transform_time,
+                "batch_io_time_sec": io_time,
+                "batch_decode_time_sec": decode_time,
+                "batch_transform_time_sec": transform_time,
                 "forward_pass_time_sec": forward_time,
                 "backward_pass_time_sec": backward_time,
                 "optimizer_step_time_sec": optimizer_time,
                 "loss": loss,
-                "samples_per_sec": total_samples / max(elapsed_time, 1e-12),
-                "batches_per_sec": (loop_batch + 1) / max(elapsed_time, 1e-12),
-                # **batch_metrics,
-                "elapsed_time_sec": (
-                    time.perf_counter() - run_start
-                ),
+                "samples_per_sec": samples_per_sec,
+                "batches_per_sec": batches_per_sec,
+                "elapsed_time_sec": elapsed_time,
             }
 
             on_batch_end(row)
@@ -403,14 +326,10 @@ def run_training_loop(
             if is_warmup:
                 warmup_batch = loop_batch + 1
 
-                if _should_log_batch(
-                    warmup_batch,
-                    warmup_batches,
-                    log_every_batches,
-                ):
+                if _should_log_batch(warmup_batch, warmup_batches, log_every_batches):
                     _log_warmup_progress(
                         logger,
-                        mode=mode,
+                        prefix=prefix,
                         batch=warmup_batch,
                         warmup_batches=warmup_batches,
                         data_time=data_time,
@@ -419,14 +338,10 @@ def run_training_loop(
 
                 continue
 
-            if _should_log_batch(
-                completed_batches,
-                num_batches,
-                log_every_batches,
-            ):
+            if _should_log_batch(completed_batches, num_batches, log_every_batches):
                 _log_progress(
                     logger,
-                    mode=mode,
+                    prefix=prefix,
                     batch=completed_batches,
                     num_batches=num_batches,
                     total_samples=total_samples,
@@ -443,4 +358,9 @@ def run_training_loop(
 
         monitor.stop()
 
-   
+    elapsed_time = time.perf_counter() - run_start
+
+    logger.info(
+        f"{prefix} | finished | batches={completed_batches} | samples={total_samples} | "
+        f"elapsed={elapsed_time:.2f}s"
+    )

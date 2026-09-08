@@ -235,7 +235,7 @@ class MultiThreadBatchFlowPrefetcher:
             self._job_id = start_response.job_id
 
             LOGGER.info(
-                "Started BatchFlow torch prefetch job job_id=%s dataset_id=%s "
+                "Started BatchFlow job job_id=%s dataset_id=%s "
                 "lookahead_batches=%s max_ready_batches=%s fetch_workers=%s",
                 start_response.job_id,
                 self.config.dataset_id,
