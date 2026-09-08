@@ -46,5 +46,4 @@ fi
 
 python -m experiments.run_experiment \
     system=batchflow \
-    workload=imagenet_1j_resnet18 \
     "$@"
