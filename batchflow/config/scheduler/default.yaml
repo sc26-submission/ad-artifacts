@@ -1,5 +1,5 @@
 # Batch reuse
-reuse_enabled: true
+reuse_enabled: false
 
 # Scheduling
 candidate_window_size: 32
