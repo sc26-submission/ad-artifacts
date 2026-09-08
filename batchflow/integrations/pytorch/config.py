@@ -90,7 +90,7 @@ class BatchFlowTorchConfig:
     max_ready_batches: int = 16
 
     # Number of trainer-side threads used to fetch/decode worker payloads.
-    parallel_fetch_workers: int = 4
+    parallel_fetch_workers: int = 8
 
     # How long the trainer waits for a ready batch before logging/checking again.
     ready_queue_timeout_seconds: float = 0.5
