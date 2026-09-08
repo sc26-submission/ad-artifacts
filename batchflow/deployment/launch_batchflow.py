@@ -11,6 +11,7 @@ from typing import Any, Protocol
 import grpc
 import hydra
 from omegaconf import DictConfig
+import torch
 
 from batchflow.common.core import Dataset
 from batchflow.config.config_types import (
@@ -305,6 +306,10 @@ def worker_process_entry(
     run_dir: str,
     log_level: str | int = "INFO",
 ) -> None:
+    
+    torch.set_num_threads(1)
+    torch.set_num_interop_threads(1)
+    
     setup_worker_logging(
         worker_id=worker_config.worker_id,
         run_dir=run_dir,

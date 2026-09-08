@@ -103,8 +103,8 @@ class WorkerConfig:
 
     poll_interval_seconds: float = 0.02
     heartbeat_interval_seconds: float = 2.0
-    s3_fetch_threads: int = 4
-    decode_threads: int = 4
+    s3_fetch_threads: int = 2
+    decode_threads: int = 2
     transient_ttl: int = 60
 
     redis: RedisConfig = field(default_factory=RedisConfig)

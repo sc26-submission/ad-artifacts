@@ -59,11 +59,10 @@ def _run_job(
     configure_process_logging()
     logger = logging.getLogger(f"experiments.runners.coordl_runner.{job.name}")
 
+    device, use_amp = resolve_device_and_amp(job.device, job.use_amp, job_index=job_index)
     set_seed(job.seed)
-    device, use_amp = resolve_device_and_amp(
-        job.device, job.use_amp, job_index=job_index
-    )
 
+ 
     batch_iter = CoorDLBatchIterator(
         plan=plan,
         system=system,

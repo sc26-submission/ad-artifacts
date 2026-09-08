@@ -95,8 +95,10 @@ def _run_job(
     configure_process_logging()
     logger = logging.getLogger(f"experiments.runners.tensorsocket_runner.{job.name}")
 
-    set_seed(job.seed)
     device, use_amp = resolve_device_and_amp(job.device, job.use_amp, job_index=job_index)
+    set_seed(job.seed)
+
+
     consumer = TensorConsumer(
         host=system.host,
         port=system.port,

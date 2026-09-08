@@ -70,9 +70,10 @@ def _run_job(
     
     configure_process_logging()
     logger = logging.getLogger(f"experiments.runners.pytorch_runner.{job.name}")
-
-    set_seed(job.seed)
     device, use_amp = resolve_device_and_amp(job.device, job.use_amp, job_index=job_index)
+    set_seed(job.seed)
+
+    
     dataloader = _build_dataloader(dataset, system, pin_memory=device.type == "cuda")
     training = build_training_components(job=job, dataset=dataset, device=device)
     writer = PerbatchMetricsWriter(
