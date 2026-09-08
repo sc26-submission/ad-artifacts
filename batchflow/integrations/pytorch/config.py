@@ -87,10 +87,10 @@ class BatchFlowTorchConfig:
     coordinator_timeout_seconds: float | None = None
 
     # Maximum number of decoded batches to buffer for the trainer.
-    max_ready_batches: int = 16
+    max_ready_batches: int = 4
 
     # Number of trainer-side threads used to fetch/decode worker payloads.
-    parallel_fetch_workers: int = 8
+    parallel_fetch_workers: int = 4
 
     # How long the trainer waits for a ready batch before logging/checking again.
     ready_queue_timeout_seconds: float = 0.5
