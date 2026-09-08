@@ -1,12 +1,12 @@
 nodes:
   node-0:
-    host: 10.0.1.24
-    worker_count: 8
+    host: 172.31.26.105
+    worker_count: 48
     worker_port_start: 60061
 
   node-1:
-    host: 10.0.2.31
-    worker_count: 24
+    host: 172.31.59.194
+    worker_count: 16
     worker_port_start: 61061
 
 coordinator:
