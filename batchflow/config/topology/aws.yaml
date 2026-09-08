@@ -14,8 +14,8 @@ coordinator:
   port: 50051
 
 redis:
-  host: batchflow-cache.xxxxxx.cache.amazonaws.com
+  host: master.batchflow.rdior4.usw2.cache.amazonaws.com
   port: 6379
-  ssl: false
+  ssl: true
 
 startup_timeout_seconds: 60.0

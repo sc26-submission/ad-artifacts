@@ -87,7 +87,7 @@ if [[ "$REUSE_ENABLED" == "true" ]]; then
         -p "$REDIS_PORT" \
         ping 2>/dev/null | grep -q '^PONG$'; then
 
-        echo "Local Redis already running."
+        # echo "Local Redis already running."
 
     else
         echo "Starting local Redis..."
@@ -119,7 +119,7 @@ if [[ "$REUSE_ENABLED" == "true" ]]; then
         fi
     fi
 
-    echo "Clearing BatchFlow cache..."
+    # echo "Clearing BatchFlow cache..."
 
     redis-cli \
         -h "$REDIS_HOST" \
@@ -132,7 +132,7 @@ if [[ "$REUSE_ENABLED" == "true" ]]; then
             DEL \
             >/dev/null
 
-    echo "BatchFlow cache cleared."
+    # echo "BatchFlow cache cleared."
 fi
 
 
