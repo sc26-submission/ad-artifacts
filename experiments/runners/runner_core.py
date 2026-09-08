@@ -29,39 +29,83 @@ def resolve_device_and_amp(
 ) -> tuple[torch.device, bool]:
     requested = device.lower()
 
-    if requested in {"auto", "cuda"}:
-        if torch.cuda.is_available():
-            device_count = torch.cuda.device_count()
+    if requested in {"auto", "cuda"} and torch.cuda.is_available():
+        device_count = torch.cuda.device_count()
 
-            if job_index >= device_count:
-                raise RuntimeError(
-                    f"Job {job_index} requires a GPU, but only {device_count} CUDA device(s) "
-                    f"are available."
-                )
+        if job_index >= device_count:
+            raise RuntimeError(
+                f"Job {job_index} requires a GPU, but only "
+                f"{device_count} CUDA device(s) are available."
+            )
 
-            resolved = torch.device(f"cuda:{job_index}")
+        resolved = torch.device(f"cuda:{job_index}")
+        torch.cuda.set_device(resolved)
 
-        elif requested == "cuda":
-            raise RuntimeError("CUDA was requested, but no CUDA device is available.")
-
-        else:
-            resolved = torch.device("cpu")
+    elif requested == "auto":
+        resolved = torch.device("cpu")
 
     else:
         resolved = torch.device(device)
 
-        if resolved.type == "cuda" and not torch.cuda.is_available():
-            raise RuntimeError(f"Device {resolved} was requested, but CUDA is not available.")
+        if resolved.type == "cuda":
+            torch.cuda.set_device(resolved)
 
-    amp_enabled = resolved.type == "cuda" if use_amp is None else use_amp and resolved.type == "cuda"
+    amp_enabled = (
+        resolved.type == "cuda"
+        if use_amp is None
+        else bool(use_amp) and resolved.type == "cuda"
+    )
+
     return resolved, amp_enabled
 
+
+# def resolve_device_and_amp(
+#     device: str,
+#     use_amp: bool | None,
+#     *,
+#     job_index: int,
+# ) -> tuple[torch.device, bool]:
+#     requested = device.lower()
+
+#     if requested in {"auto", "cuda"}:
+#         if torch.cuda.is_available():
+#             device_count = torch.cuda.device_count()
+
+#             if job_index >= device_count:
+#                 raise RuntimeError(
+#                     f"Job {job_index} requires a GPU, but only {device_count} CUDA device(s) "
+#                     f"are available."
+#                 )
+
+#             resolved = torch.device(f"cuda:{job_index}")
+
+#         elif requested == "cuda":
+#             raise RuntimeError("CUDA was requested, but no CUDA device is available.")
+
+#         else:
+#             resolved = torch.device("cpu")
+
+#     else:
+#         resolved = torch.device(device)
+
+#         if resolved.type == "cuda" and not torch.cuda.is_available():
+#             raise RuntimeError(f"Device {resolved} was requested, but CUDA is not available.")
+
+#     amp_enabled = resolved.type == "cuda" if use_amp is None else use_amp and resolved.type == "cuda"
+#     return resolved, amp_enabled
 
 def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
 
     if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+        torch.cuda.manual_seed(seed)
+
+
+# def set_seed(seed: int) -> None:
+#     torch.manual_seed(seed)
+
+#     if torch.cuda.is_available():
+#         torch.cuda.manual_seed_all(seed)
 
 
 def _batch_scalar(batch: dict[str, Any], key: str, default: float = 0.0) -> float:
